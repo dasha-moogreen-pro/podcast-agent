@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Даша — podcast brief</title>
+<style>
+body{font:17px/1.5 system-ui;margin:0;background:#f7f4ee;color:#1e2920}
+main{max-width:680px;margin:0 auto;padding:28px 18px}
+input,button{font:inherit;border-radius:10px;padding:13px}
+input{box-sizing:border-box;width:100%;border:1px solid #b7c0ad}
+button{margin-top:10px;background:#173d28;color:white;border:0;font-weight:650}
+#status{margin:16px 0;color:#586154}
+#result{white-space:pre-wrap;background:white;padding:18px;border-radius:12px}
+</style>
+<main>
+<h1>Podcast brief</h1>
+<p>Вставь публичную ссылку на выпуск — я верну персональную выжимку.</p>
+<input id="url" type="url" placeholder="https://…">
+<button id="go">Разобрать выпуск</button>
+<p id="status"></p>
+<article id="result"></article>
+</main>
+<script>
+const q=s=>document.querySelector(s);
+q('#go').onclick=async()=>{
+  q('#status').textContent='Получаю аудио и расшифровываю — это может занять несколько минут.';
+  q('#result').textContent='';
+  try{
+    let r=await fetch('/api/brief',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:q('#url').value})
+    }),d=await r.json();
+    if(!r.ok)throw Error(d.error);
+    q('#result').textContent=d.summary;
+    q('#status').textContent='Готово.';
+  }catch(e){q('#status').textContent='Ошибка: '+e.message}
+};
+</script>
+</html>
