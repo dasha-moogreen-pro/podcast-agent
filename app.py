@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
+import imageio_ffmpeg
 import requests
 from flask import Flask, jsonify, render_template, request
 from openai import OpenAI
@@ -93,14 +95,39 @@ def download_audio(url: str, directory: Path) -> Path:
     return files[0]
 
 
-def transcribe(audio_path: Path) -> str:
+def split_for_transcription(audio_path: Path, directory: Path) -> list[Path]:
+    """Make small mono MP3 parts so long episodes fit the transcription upload limit."""
+    output = directory / "part-%03d.mp3"
+    command = [
+        imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-i", str(audio_path), "-vn",
+        "-ac", "1", "-ar", "16000", "-b:a", "48k", "-f", "segment",
+        "-segment_time", "600", "-reset_timestamps", "1", str(output),
+    ]
+    completed = subprocess.run(
+        command, capture_output=True, text=True, timeout=600, check=False
+    )
+    if completed.returncode:
+        raise RuntimeError("Не удалось подготовить аудио к расшифровке.")
+    parts = sorted(directory.glob("part-*.mp3"))
+    if not parts:
+        raise RuntimeError("Не удалось выделить звук из выпуска.")
+    return parts
+
+
+def transcribe(audio_path: Path, directory: Path) -> str:
     client = OpenAI()
-    with audio_path.open("rb") as audio:
-        result = client.audio.transcriptions.create(
-            model="gpt-transcribe", file=audio, language="ru",
-            prompt="Русский подкаст. Важные имена и термины: Даша, MOOGREEN, MOOGREEN PRO, ВкусВилл, Ozon, Wildberries, B2B."
-        )
-    return result.text
+    transcript_parts = []
+    for number, part in enumerate(split_for_transcription(audio_path, directory), start=1):
+        with part.open("rb") as audio:
+            result = client.audio.transcriptions.create(
+                model="gpt-transcribe", file=audio, language="ru",
+                prompt=(
+                    "Русский подкаст. Важные имена и термины: Даша, MOOGREEN, "
+                    "MOOGREEN PRO, ВкусВилл, Ozon, Wildberries, B2B."
+                ),
+            )
+        transcript_parts.append(f"[Часть {number}]\n{result.text}")
+    return "\n\n".join(transcript_parts)
 
 
 def make_brief(transcript: str, title: str) -> str:
@@ -128,7 +155,7 @@ def brief():
     try:
         with tempfile.TemporaryDirectory() as temp:
             audio = download_audio(url, Path(temp))
-            transcript = transcribe(audio)
+            transcript = transcribe(audio, Path(temp))
             result = make_brief(transcript, title_from_url(url))
         return jsonify(summary=result)
     except Exception as error:  # return a readable operational error, never a stack trace
