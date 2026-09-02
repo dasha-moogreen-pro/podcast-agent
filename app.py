@@ -9,6 +9,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import imageio_ffmpeg
+import bleach
+import markdown
 import requests
 from flask import Flask, jsonify, render_template, request
 from openai import OpenAI
@@ -50,6 +52,37 @@ SUMMARY_PROMPT = """Ты — персональный агент Даши по �
 — только важные фрагменты. Указывай таймкоды лишь если они есть во входном тексте; не выдумывай.
 
 Вердикт: [обязательно / выборочно / можно пропустить].
+"""
+
+# Strict v2: source fidelity first, MOOGREEN implications second.
+SUMMARY_PROMPT = """Ты — личный аналитик Даши. Сначала точно объясни разговор, только затем анализируй применимость.
+MOOGREEN PRO — самостоятельное B2B-направление для wellness-пространств; не подменяй его розничным каналом.
+Не приписывай Даше слова ведущей/гостя. Не выдавай свои планы за слова выпуска. Не выдумывай цифры, сроки, условия, таймкоды или цитаты.
+
+Пиши по-русски, в Markdown, короткими блоками для телефона. Ровно такой порядок:
+
+# [Название / гость]
+## Коротко: о чём разговор
+3–4 простые строки: кто, какую проблему обсуждают, позиция гостя, итог. Затем: «Читать дальше стоит, если…».
+## Краткий лог разговора
+6–10 хронологических пунктов: вопрос/тема → ответ, пример, возражение или поворот. Таймкод только если он дан во входе; иначе не ставь.
+## Главное из беседы
+Таблица Markdown: `Тезис гостя | Основание в разговоре | Статус`.
+Статус: `сказано гостем`, `кейс/мнение`, `не доказано`.
+## Суть в трёх идеях
+Только наиболее ценные идеи из источника.
+## Карта решений для MOOGREEN PRO
+Таблица: `Идея из выпуска | Применимость | Риск/ограничение | Что проверить`.
+Не подразумевай, что описанный канал — правильная стратегия для MOOGREEN.
+## Для MOOGREEN: стратегия, гипотезы, предложения
+— Стратегический вывод: влияет / не влияет / рано решать — и почему.
+— Гипотезы для проверки: до 3.
+— Предложения: до 3, каждое помечай `предложение агента`.
+— Не делать сейчас: до 3.
+— Недостающие данные до решения: до 3.
+## Источник и проверяемость
+Короткие цитаты лишь дословно и только при уверенности. Укажи, если таймкоды недоступны.
+Вердикт: обязательно / выборочно / можно пропустить.
 """
 
 
@@ -162,6 +195,22 @@ def make_brief(transcript: str, title: str) -> str:
     return response.output_text
 
 
+def render_brief_markdown(brief: str) -> str:
+    """Render the model's Markdown while allowing only safe, useful formatting."""
+    rendered = markdown.markdown(brief, extensions=["tables", "sane_lists"])
+    return bleach.clean(
+        rendered,
+        tags={
+            "h1", "h2", "h3", "p", "ul", "ol", "li", "table", "thead",
+            "tbody", "tr", "th", "td", "strong", "em", "blockquote", "code",
+            "hr", "br", "a",
+        },
+        attributes={"a": ["href", "title"]},
+        protocols=["http", "https"],
+        strip=True,
+    )
+
+
 @app.get("/")
 def home():
     return render_template("index.html")
@@ -179,7 +228,7 @@ def brief():
             audio = download_audio(url, Path(temp))
             transcript = transcribe(audio, Path(temp))
             result = make_brief(transcript, title_from_url(url))
-        return jsonify(summary=result)
+        return jsonify(summary_html=render_brief_markdown(result))
     except Exception as error:  # return a readable operational error, never a stack trace
         return jsonify(error=str(error)), 502
 
