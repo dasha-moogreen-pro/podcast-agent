@@ -2,39 +2,43 @@
 <html lang="ru">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Даша — podcast brief</title>
+<title>Даша — Podcast brief</title>
 <style>
-body{font:17px/1.5 system-ui;margin:0;background:#f7f4ee;color:#1e2920}
-main{max-width:680px;margin:0 auto;padding:28px 18px}
-input,button{font:inherit;border-radius:10px;padding:13px}
-input{box-sizing:border-box;width:100%;border:1px solid #b7c0ad}
-button{margin-top:10px;background:#173d28;color:white;border:0;font-weight:650}
-#status{margin:16px 0;color:#586154}
-#result{white-space:pre-wrap;background:white;padding:18px;border-radius:12px}
+  :root{--ink:#1e2920;--muted:#596457;--paper:#fff;--bg:#f7f4ee;--line:#dce2d7;--accent:#173d28}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  main{max-width:760px;margin:0 auto;padding:32px 18px 52px} h1{font-size:clamp(2rem,8vw,3.25rem);letter-spacing:-.04em;margin:0 0 10px} main>p{margin:0 0 26px;font-size:1.08rem}
+  label{display:block;font-weight:700;margin-bottom:8px} input,button{font:inherit;border-radius:12px;padding:14px 16px} input{width:100%;border:1px solid #b7c0ad;background:#fff} button{margin-top:10px;background:var(--accent);color:#fff;border:0;font-weight:750;cursor:pointer}button:disabled{opacity:.65;cursor:wait}
+  #status{min-height:1.6em;margin:16px 0;color:var(--muted)} #result{display:none;background:var(--paper);border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:0 3px 18px #173d2810}
+  #result h1{font-size:1.55rem;letter-spacing:-.02em;margin:0 0 20px} #result h2{font-size:1.14rem;margin:30px -2px 12px;padding:10px 2px 8px;border-bottom:1px solid var(--line)} #result h2:first-of-type{margin-top:0}
+  #result h3{font-size:1rem;margin:20px 0 7px} #result p{margin:9px 0} #result ul,#result ol{padding-left:1.3rem;margin:8px 0} #result li{margin:7px 0} #result blockquote{margin:12px 0;padding:10px 13px;border-left:3px solid #8fa486;background:#f7faf5;color:#3c4a3e}
+  #result table{display:block;width:100%;overflow-x:auto;border-collapse:collapse;margin:12px 0 20px;font-size:.9rem;white-space:normal} #result th,#result td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;min-width:135px} #result th{background:#f1f5ee;font-weight:700} #result hr{border:0;border-top:1px solid var(--line);margin:24px 0}
+  @media(max-width:480px){main{padding:25px 14px 42px}#result{padding:15px}#result table{font-size:.84rem}#result th,#result td{min-width:120px;padding:8px}}
 </style>
 <main>
-<h1>Podcast brief</h1>
-<p>Вставь публичную ссылку на выпуск — я верну персональную выжимку.</p>
-<input id="url" type="url" placeholder="https://…">
-<button id="go">Разобрать выпуск</button>
-<p id="status"></p>
-<article id="result"></article>
+  <h1>Podcast brief</h1>
+  <p>Вставь публичную ссылку на выпуск — я верну персональную выжимку.</p>
+  <label for="url">Ссылка на выпуск</label>
+  <input id="url" type="url" inputmode="url" placeholder="https://…" autocomplete="url">
+  <button id="go">Разобрать выпуск</button>
+  <p id="status" aria-live="polite"></p>
+  <article id="result"></article>
 </main>
 <script>
-const q=s=>document.querySelector(s);
-q('#go').onclick=async()=>{
-  q('#status').textContent='Получаю аудио и расшифровываю — это может занять несколько минут.';
-  q('#result').textContent='';
-  try{
-    let r=await fetch('/api/brief',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({url:q('#url').value})
-    }),d=await r.json();
-    if(!r.ok)throw Error(d.error);
-    q('#result').textContent=d.summary;
-    q('#status').textContent='Готово.';
-  }catch(e){q('#status').textContent='Ошибка: '+e.message}
-};
+  const q = selector => document.querySelector(selector);
+  q('#go').onclick = async () => {
+    const button = q('#go'), status = q('#status'), result = q('#result');
+    button.disabled = true;
+    status.textContent = 'Получаю аудио и расшифровываю — это может занять несколько минут.';
+    result.style.display = 'none'; result.innerHTML = '';
+    try {
+      const response = await fetch('/api/brief', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:q('#url').value})});
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error || 'Не удалось обработать выпуск.');
+      result.innerHTML = data.summary_html;
+      result.style.display = 'block';
+      status.textContent = 'Готово.';
+    } catch (error) { status.textContent = 'Ошибка: ' + error.message; }
+    finally { button.disabled = false; }
+  };
 </script>
 </html>
