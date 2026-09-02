@@ -58,8 +58,36 @@ def title_from_url(url: str) -> str:
     return f"Выпуск с {host}"
 
 
+def direct_mave_audio_url(url: str) -> str | None:
+    """Extract the active episode's MP3 from a public Mave episode page."""
+    if not urlparse(url).netloc.endswith("mave.digital"):
+        return None
+    response = requests.get(url, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+    response.raise_for_status()
+    match = re.search(
+        r"storage/podcasts/[^\"\\]+/episodes/[^\"\\]+\.mp3",
+        response.text,
+    )
+    if not match:
+        return None
+    return f"https://cdn.mave.digital/{match.group(0)}"
+
+
+def download_direct_audio(url: str, directory: Path) -> Path:
+    target = directory / "source.mp3"
+    response = requests.get(url, timeout=120, stream=True)
+    response.raise_for_status()
+    with target.open("wb") as stream:
+        for chunk in response.iter_content(1024 * 1024):
+            stream.write(chunk)
+    return target
+
+
 def download_audio(url: str, directory: Path) -> Path:
     """Use yt-dlp for YouTube and podcast pages; direct audio URLs get a safe fallback."""
+    mave_audio = direct_mave_audio_url(url)
+    if mave_audio:
+        return download_direct_audio(mave_audio, directory)
     output = str(directory / "source.%(ext)s")
     options = {
         "outtmpl": output,
@@ -78,13 +106,7 @@ def download_audio(url: str, directory: Path) -> Path:
     except Exception as extraction_error:
         # Some podcast hosts expose a direct MP3 link; downloading it is a valid fallback.
         if re.search(r"\.(mp3|m4a|wav|webm)(?:$|[?&])", url, re.I):
-            target = directory / "source.mp3"
-            response = requests.get(url, timeout=120, stream=True)
-            response.raise_for_status()
-            with target.open("wb") as stream:
-                for chunk in response.iter_content(1024 * 1024):
-                    stream.write(chunk)
-            return target
+            return download_direct_audio(url, directory)
         raise RuntimeError(
             "Не удалось получить аудио по этой ссылке. Пришли прямую ссылку на выпуск "
             "или попробуй зеркало (YouTube/Spotify)."
