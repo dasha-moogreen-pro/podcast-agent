@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -12,7 +13,10 @@ import imageio_ffmpeg
 import bleach
 import markdown
 import requests
-from flask import Flask, jsonify, render_template, request
+from bs4 import BeautifulSoup, NavigableString, Tag
+from docx import Document
+from docx.shared import Cm, Pt
+from flask import Flask, jsonify, render_template, request, send_file
 from openai import OpenAI
 from yt_dlp import YoutubeDL
 
@@ -211,6 +215,84 @@ def render_brief_markdown(brief: str) -> str:
     )
 
 
+def add_inline_content(paragraph, element: Tag) -> None:
+    """Copy the useful inline formatting from a safe brief HTML fragment."""
+    for child in element.children:
+        if isinstance(child, NavigableString):
+            paragraph.add_run(str(child))
+        elif child.name == "br":
+            paragraph.add_run().add_break()
+        elif child.name in {"strong", "b"}:
+            run = paragraph.add_run(child.get_text())
+            run.bold = True
+        elif child.name in {"em", "i"}:
+            run = paragraph.add_run(child.get_text())
+            run.italic = True
+        elif child.name == "code":
+            run = paragraph.add_run(child.get_text())
+            run.font.name = "Courier New"
+        else:
+            add_inline_content(paragraph, child)
+
+
+def brief_docx(brief_html: str) -> BytesIO:
+    """Create an editable Word document from the safe rendered brief."""
+    safe_html = bleach.clean(
+        brief_html,
+        tags={"h1", "h2", "h3", "p", "ul", "ol", "li", "table", "thead", "tbody",
+              "tr", "th", "td", "strong", "em", "blockquote", "code", "hr", "br", "a"},
+        attributes={"a": ["href", "title"]}, protocols=["http", "https"], strip=True,
+    )
+    soup = BeautifulSoup(safe_html, "html.parser")
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = section.bottom_margin = Cm(1.7)
+    section.left_margin = section.right_margin = Cm(1.8)
+    normal = document.styles["Normal"]
+    normal.font.name = "Arial"
+    normal.font.size = Pt(10.5)
+
+    for element in soup.contents:
+        if isinstance(element, NavigableString) or not isinstance(element, Tag):
+            continue
+        if element.name in {"h1", "h2", "h3"}:
+            level = int(element.name[1])
+            document.add_heading(element.get_text(" ", strip=True), level=level)
+        elif element.name == "p":
+            paragraph = document.add_paragraph()
+            add_inline_content(paragraph, element)
+        elif element.name == "blockquote":
+            paragraph = document.add_paragraph(style="Quote")
+            add_inline_content(paragraph, element)
+        elif element.name in {"ul", "ol"}:
+            style = "List Bullet" if element.name == "ul" else "List Number"
+            for item in element.find_all("li", recursive=False):
+                paragraph = document.add_paragraph(style=style)
+                add_inline_content(paragraph, item)
+        elif element.name == "table":
+            rows = element.find_all("tr")
+            if not rows:
+                continue
+            columns = max(len(row.find_all(["th", "td"], recursive=False)) for row in rows)
+            table = document.add_table(rows=0, cols=columns)
+            table.style = "Table Grid"
+            for row in rows:
+                cells = row.find_all(["th", "td"], recursive=False)
+                word_cells = table.add_row().cells
+                for index, cell in enumerate(cells):
+                    add_inline_content(word_cells[index].paragraphs[0], cell)
+                    if cell.name == "th":
+                        for run in word_cells[index].paragraphs[0].runs:
+                            run.bold = True
+        elif element.name == "hr":
+            document.add_paragraph("—" * 28)
+
+    output = BytesIO()
+    document.save(output)
+    output.seek(0)
+    return output
+
+
 @app.get("/")
 def home():
     return render_template("index.html")
@@ -231,6 +313,21 @@ def brief():
         return jsonify(summary_html=render_brief_markdown(result))
     except Exception as error:  # return a readable operational error, never a stack trace
         return jsonify(error=str(error)), 502
+
+
+@app.post("/api/export/docx")
+def export_docx():
+    brief_html = (request.json or {}).get("summary_html", "")
+    if not isinstance(brief_html, str) or not brief_html.strip():
+        return jsonify(error="Сначала сформируй разбор выпуска."), 400
+    if len(brief_html) > 1_500_000:
+        return jsonify(error="Разбор слишком большой для экспорта."), 400
+    return send_file(
+        brief_docx(brief_html),
+        as_attachment=True,
+        download_name="podcast-brief.docx",
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
 if __name__ == "__main__":
